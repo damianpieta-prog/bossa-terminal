@@ -255,7 +255,7 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             for r in res_list: draw_card(r)
 
 # ==========================================
-# APLIKACJA 3: IRYDOLOGIA AI (FIX: PLIKI)
+# APLIKACJA 3: IRYDOLOGIA AI
 # ==========================================
 elif app_mode == "👁️ Irydologia AI":
     st.title("👁️ Irydologia AI (System Wzorców Własnych)")
@@ -267,14 +267,13 @@ elif app_mode == "👁️ Irydologia AI":
     else:
         api_key = st.text_input("🔑 Wpisz swój klucz Google Gemini API:", type="password")
     
-    # 2. LISTA TWOICH PLIKÓW (IDEALNIE ZGODNA Z TWOIM UPLOADEM)
+    # 2. LISTA TWOICH PLIKÓW
     REFERENCE_FILES = [
         "konstytucja.jpeg",
         "teczowka.jpeg", 
         "twardowka.jpeg",
         "kryza.jpeg",
-        "mapa_irydologiczna.jpg" # Zmieniłem na .jpg bo tak wgrałeś!
-        # "mapa teczowki.jpeg"   <-- Usunąłem, bo nie widzę tego pliku na Twojej liście!
+        "mapa_irydologiczna.jpg" 
     ]
 
     uploaded_file = st.file_uploader("Wgraj zdjęcie oka pacjenta...", type=["jpg", "png", "jpeg"])
@@ -290,7 +289,9 @@ elif app_mode == "👁️ Irydologia AI":
         
         if st.button("🔍 URUCHOM ANALIZĘ (Z użyciem moich map)"):
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # ZMIANA NA BARDZIEJ STABILNY MODEL
+            model = genai.GenerativeModel('gemini-1.5-pro')
             
             with st.spinner('AI studiuje Twoje mapy i analizuje pacjenta...'):
                 try:
