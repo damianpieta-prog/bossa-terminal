@@ -4,4 +4,4 @@ yfinance
 plotly
 ta
 numpy
-google-generativeai
+google-generativeai>=0.7.0
