@@ -255,19 +255,15 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             for r in res_list: draw_card(r)
 
 # ==========================================
-# APLIKACJA 3: IRYDOLOGIA AI (DIAGNOSTYKA MODELI)
+# APLIKACJA 3: IRYDOLOGIA AI (MODEL 2.5 + KLUCZ)
 # ==========================================
 elif app_mode == "👁️ Irydologia AI":
     st.title("👁️ Irydologia AI (System Wzorców Własnych)")
-    st.markdown("Ten system uczy się na podstawie Twoich map i książek, aby lepiej ocenić oko pacjenta.")
+    st.markdown("System korzysta z zaawansowanego modelu Gemini 2.5 Flash i Twoich map.")
     
-    # --- INTELIGENTNE POBIERANIE KLUCZA ---
-    if "GOOGLE_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-    else:
-        api_key = st.text_input("🔑 Wpisz swój klucz Google Gemini API:", type="password")
+    # === TWOJE DANE (WPISANE NA SZTYWNO) ===
+    api_key = "AIzaSyB3CYXGVWsouSHuQRo8TF7mh_uT8BuHoQU"
     
-    # 2. LISTA TWOICH PLIKÓW
     REFERENCE_FILES = [
         "konstytucja.jpeg",
         "teczowka.jpeg", 
@@ -278,7 +274,7 @@ elif app_mode == "👁️ Irydologia AI":
 
     uploaded_file = st.file_uploader("Wgraj zdjęcie oka pacjenta...", type=["jpg", "png", "jpeg"])
 
-    if uploaded_file and api_key:
+    if uploaded_file:
         patient_img = Image.open(uploaded_file)
         
         c1, c2 = st.columns(2)
@@ -290,64 +286,52 @@ elif app_mode == "👁️ Irydologia AI":
         if st.button("🔍 URUCHOM ANALIZĘ"):
             genai.configure(api_key=api_key)
             
-            # --- BLOK DIAGNOSTYCZNY ---
-            # Jeśli 1.5-flash nie zadziała, kod automatycznie wypisze dostępne modele
-            try:
-                # Próbujemy najpierw 1.5-flash
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                
-                with st.spinner('AI studiuje Twoje mapy i analizuje pacjenta...'):
+            # --- ZMIANA NA MODEL, KTÓRY JEST U CIEBIE DOSTĘPNY (2.5) ---
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            
+            with st.spinner('AI studiuje Twoje mapy i analizuje pacjenta...'):
+                try:
                     prompt_parts = []
                     
                     prompt_parts.append("""
-                    Jesteś ekspertem irydologii. Analizuj oko pacjenta PORÓWNUJĄC je z WZORCAMI.
-                    Użyj 'mapa_irydologiczna' do lokalizacji.
-                    Zidentyfikuj znaki i postaw diagnozę.
-                    OTO WZORCE:
+                    Jesteś ekspertem irydologii. Twoim zadaniem jest analiza oka pacjenta,
+                    ściśle opierając się na DOSTARCZONYCH PONIŻEJ WZORCACH i MAPACH.
+                    
+                    Zasady:
+                    1. Użyj 'mapa_irydologiczna' do lokalizacji organów.
+                    2. Użyj 'kryza' i 'twardowka' do oceny struktury i układu nerwowego.
+                    3. Użyj 'konstytucja' do określenia typu budowy.
+                    
+                    Zadanie:
+                    - Zidentyfikuj widoczne znaki (zatoki, psora, pierścienie).
+                    - Zlokalizuj je na mapie organów (np. "Godzina 6:00 - Nerki").
+                    - Postaw diagnozę w punktach.
+                    
+                    OTO TWOJE MATERIAŁY REFERENCYJNE:
                     """)
                     
-                    loaded_count = 0
+                    missing_files = []
                     for filename in REFERENCE_FILES:
                         try:
                             img = Image.open(filename)
-                            prompt_parts.append(f"WZORZEC: {filename}")
+                            prompt_parts.append(f"WZORZEC/MAPA: {filename}")
                             prompt_parts.append(img)
-                            loaded_count += 1
-                        except: pass
+                        except FileNotFoundError:
+                            missing_files.append(filename)
 
-                    if loaded_count == 0:
-                        st.error("Błąd: Brak wzorców na GitHubie.")
+                    if missing_files:
+                        st.error(f"⚠️ Nie znaleziono plików: {', '.join(missing_files)}")
                         st.stop()
 
                     prompt_parts.append("--- KONIEC WZORCÓW ---")
-                    prompt_parts.append("ZDJĘCIE PACJENTA:")
+                    prompt_parts.append("A TERAZ PRZEANALIZUJ TO ZDJĘCIE PACJENTA:")
                     prompt_parts.append(patient_img)
                     
                     response = model.generate_content(prompt_parts)
+                    
                     st.success("Analiza zakończona!")
                     st.markdown("### 📋 Raport Irydologiczny")
                     st.write(response.text)
-
-            except Exception as e:
-                # Jeśli wystąpi błąd, wypiszemy diagnostykę
-                st.error(f"⚠️ Błąd połączenia z modelem AI.")
-                st.code(str(e))
-                
-                st.warning("🔍 Sprawdzam, jakie modele są dostępne dla Twojego klucza...")
-                try:
-                    available_models = []
-                    for m in genai.list_models():
-                        if 'generateContent' in m.supported_generation_methods:
-                            available_models.append(m.name)
                     
-                    if available_models:
-                        st.success("Twój klucz widzi następujące modele:")
-                        st.write(available_models)
-                        st.info("💡 Wskazówka: Jeśli widzisz na liście 'models/gemini-pro-vision' lub inny, daj znać - zmienimy go w kodzie!")
-                    else:
-                        st.error("Twój klucz nie widzi żadnych modeli. Sprawdź czy jest poprawny w Google AI Studio.")
-                except Exception as ex:
-                    st.error(f"Nie udało się pobrać listy modeli: {ex}")
-
-    elif not api_key:
-        st.warning("👈 Wpisz klucz API (lub skonfiguruj Secrets w Streamlit), aby rozpocząć.")
+                except Exception as e:
+                    st.error(f"Wystąpił błąd: {e}")
