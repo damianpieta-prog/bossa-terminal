@@ -14,6 +14,23 @@ from ta.volatility import AverageTrueRange
 st.set_page_config(page_title="CENTRUM DOWODZENIA", layout="wide", page_icon="🧠")
 
 # ==========================================
+# 📥 FUNKCJE GLOBALNE (Dostępne dla każdej aplikacji)
+# ==========================================
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1zAE2mUbcVwBfI78f7v3_4K20Z5ffXymyrIcqcyadF4M/export?format=csv&gid=0"
+
+@st.cache_data(ttl=900)
+def load_tickers():
+    """Pobiera listę tickerów z Google Sheet"""
+    try:
+        df = pd.read_csv(SHEET_URL)
+        if df.empty: return []
+        tickers = df.iloc[:, 0].dropna().astype(str).tolist()
+        # Czyścimy i usuwamy duplikaty
+        clean_tickers = sorted(list(set([t.strip() for t in tickers if len(t) > 1])))
+        return clean_tickers
+    except: return []
+
+# ==========================================
 # 🎛️ MENU GŁÓWNE (PASEK BOCZNY)
 # ==========================================
 st.sidebar.title("🎛️ NAWIGACJA")
@@ -28,21 +45,11 @@ st.sidebar.markdown("---")
 # ==========================================
 if app_mode == "🚀 BOSSA Terminal":
     
-    # --- Konfiguracja i Funkcje ---
-    SHEET_URL = "https://docs.google.com/spreadsheets/d/1zAE2mUbcVwBfI78f7v3_4K20Z5ffXymyrIcqcyadF4M/export?format=csv&gid=0"
+    # --- Konfiguracja lokalna ---
     RSI_MOMENTUM = 65
     ATR_MULTIPLIER = 2.5
     SL_NORMAL_PCT = 0.015
     SL_TIGHT_PCT = 0.006
-
-    @st.cache_data(ttl=900)
-    def load_tickers():
-        try:
-            df = pd.read_csv(SHEET_URL)
-            if df.empty: return []
-            tickers = df.iloc[:, 0].dropna().astype(str).tolist()
-            return [t.strip() for t in tickers if len(t) > 1]
-        except: return []
 
     def get_data(ticker):
         if ticker == "DAX": ticker = "^GDAXI"
@@ -57,7 +64,6 @@ if app_mode == "🚀 BOSSA Terminal":
 
     def calculate_signals(df):
         close = df['Close']
-        # Wskaźniki
         ema9 = EMAIndicator(close, window=9).ema_indicator()
         ema17 = EMAIndicator(close, window=17).ema_indicator()
         ema100 = EMAIndicator(close, window=100).ema_indicator()
@@ -65,20 +71,17 @@ if app_mode == "🚀 BOSSA Terminal":
         rsi = RSIIndicator(close, window=14).rsi()
         atr = AverageTrueRange(df['High'], df['Low'], close, window=14).average_true_range()
         
-        # Do wykresu
         df['EMA_9'] = ema9
         df['EMA_17'] = ema17
         df['EMA_100'] = ema100
         df['EMA_200'] = ema200
 
-        # Regresja
         y = close.tail(50).values
         x = np.arange(len(y))
         coef = np.polyfit(x, y, 1)
         lin_reg = np.poly1d(coef)(x)
         std_dev = np.std(y - lin_reg)
         
-        # Logika
         current_price = close.iloc[-1]
         keltner_upper = EMAIndicator(close, window=20).ema_indicator().iloc[-1] + (atr.iloc[-1] * ATR_MULTIPLIER)
         
@@ -195,92 +198,119 @@ if app_mode == "🚀 BOSSA Terminal":
         st.info("Brak sygnałów kupna w Twoim portfelu.")
 
 # ==========================================
-# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Twoja Wersja)
+# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Wersja 2.0 - Arkusz)
 # ==========================================
 elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
     st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
     st.write("Strategia: Kupuj, gdy inni się boją (poniżej średniej 200-tygodniowej).")
 
+    # Pobierz tickery z arkusza
+    sheet_tickers = load_tickers()
+    
+    # Wybór trybu pracy
+    mode = st.radio("Tryb analizy:", ["🔍 Pojedyncza Spółka", "📋 Skanuj Cały Portfel (Raport)"], horizontal=True)
+
     @st.cache_data(ttl=600)
     def pobierz_dane_safe(symbol_aktywa):
+        # Mapowanie dla złota/ropy jeśli ktoś wpisze dziwnie
+        if symbol_aktywa == "GOLD": symbol_aktywa = "GLD"
+        
         ticker = yf.Ticker(symbol_aktywa)
         df = ticker.history(period="5y", interval="1wk")
         return df
 
-    symbol = st.text_input("Wpisz symbol (np. BTC-USD, GLD, GOOG):", value="BTC-USD").upper()
+    # --- FUNKCJA RYSUJĄCA KAFE ---
+    def draw_safe_analysis(symbol, data):
+        if data.empty:
+            st.error(f"Brak danych dla {symbol}")
+            return False
 
-    if symbol == "GOLD":
-        st.warning("Dla złota wpisz symbol: GLD (fundusz) lub GC=F (kontrakty). Używam GLD.")
-        symbol = "GLD"
+        current_price = data['Close'].iloc[-1]
+        wma_200 = data['Close'].rolling(window=200).mean().iloc[-1]
+        if pd.isna(wma_200): wma_200 = data['Close'].min()
 
-    if symbol:
-        try:
-            with st.spinner(f'Sprawdzam cenę {symbol}...'):
+        risk_floor = wma_200
+        ath = data['High'].max()
+        reward_ceiling = max(ath, current_price * 1.1)
+        
+        upside = reward_ceiling - current_price
+        downside = current_price - risk_floor
+        
+        # Logika werdyktu
+        if downside <= 0:
+            rr_ratio = 5.0 # Max scale
+            verdict = "OKAZJA ŻYCIA"
+            color = "#21c354"
+        else:
+            rr_ratio = upside / downside
+            if rr_ratio > 3:
+                verdict = "OKAZJA (KUPUJ)"
+                color = "#21c354"
+            elif rr_ratio > 1:
+                verdict = "NEUTRALNIE"
+                color = "#ffa421"
+            else:
+                verdict = "NIEOPŁACALNE"
+                color = "#ff4b4b"
+        
+        # Wyświetlanie
+        with st.container():
+            st.markdown(f"### {symbol}")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.metric("Cena", f"{current_price:,.2f}")
+                st.markdown(f"Werdykt: **<span style='color:{color}'>{verdict}</span>**", unsafe_allow_html=True)
+                st.metric("Bezpieczne Dno", f"{risk_floor:,.2f}", delta=f"-{downside:,.2f}", delta_color="inverse")
+            with c2:
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number", value = rr_ratio,
+                    title = {'text': "Zysk/Ryzyko"},
+                    gauge = {
+                        'axis': {'range': [0, 5]},
+                        'bar': {'color': "black"},
+                        'steps': [
+                            {'range': [0, 1], 'color': "#ff4b4b"},
+                            {'range': [1, 3], 'color': "#ffa421"},
+                            {'range': [3, 5], 'color': "#21c354"}
+                        ],
+                        'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': rr_ratio}
+                    }
+                ))
+                fig.update_layout(height=200, margin=dict(l=20,r=20,t=30,b=20))
+                st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+        return True
+
+    # --- TRYB 1: POJEDYNCZY ---
+    if mode == "🔍 Pojedyncza Spółka":
+        # Selectbox z tickerami z arkusza + opcja wpisania
+        if sheet_tickers:
+            symbol = st.selectbox("Wybierz walor z listy:", sheet_tickers)
+        else:
+            symbol = st.text_input("Wpisz symbol (np. BTC-USD):", value="BTC-USD")
+
+        if symbol:
+            with st.spinner(f"Analizuję {symbol}..."):
                 data = pobierz_dane_safe(symbol)
-                
-                if data.empty:
-                    st.error(f"Nie znaleziono symbolu '{symbol}'. Sprawdź pisownię na Yahoo Finance.")
-                else:
-                    # --- LOGIKA ---
-                    current_price = data['Close'].iloc[-1]
-                    wma_200 = data['Close'].rolling(window=200).mean().iloc[-1]
-                    
-                    if pd.isna(wma_200):
-                         wma_200 = data['Close'].min()
+                draw_safe_analysis(symbol, data)
 
-                    risk_floor = wma_200
-                    ath = data['High'].max()
-                    reward_ceiling = max(ath, current_price * 1.1)
-                    
-                    upside = reward_ceiling - current_price
-                    downside = current_price - risk_floor
-                    
-                    if downside <= 0:
-                        rr_ratio = 10.0
-                        verdict = "OKAZJA ŻYCIA (Cena poniżej średniej!)"
-                        color = "#21c354"
-                    else:
-                        rr_ratio = upside / downside
-                        if rr_ratio > 3:
-                            verdict = "OKAZJA (KUPUJ)"
-                            color = "#21c354"
-                        elif rr_ratio > 1:
-                            verdict = "NEUTRALNIE (CZEKAJ)"
-                            color = "#ffa421"
-                        else:
-                            verdict = "NIEOPŁACALNE (RYZYKO!)"
-                            color = "#ff4b4b"
-
-                    # --- WYŚWIETLANIE ---
-                    col_main, col_chart = st.columns([1, 2])
-                    
-                    with col_main:
-                        st.metric(label="Aktualna Cena", value=f"${current_price:,.2f}")
-                        st.markdown(f"### Werdykt: <span style='color:{color}'>{verdict}</span>", unsafe_allow_html=True)
-                        st.write("---")
-                        st.metric("Bezpieczne Dno (MA200)", f"${risk_floor:,.0f}", delta=f"-${downside:,.0f}", delta_color="inverse")
-                        st.metric("Realny Szczyt (ATH)", f"${reward_ceiling:,.0f}", delta=f"+${upside:,.0f}")
-
-                    with col_chart:
-                        fig = go.Figure(go.Indicator(
-                            mode = "gauge+number",
-                            value = rr_ratio,
-                            title = {'text': "Wskaźnik Zysku do Ryzyka"},
-                            gauge = {
-                                'axis': {'range': [0, 5]},
-                                'bar': {'color': "black"},
-                                'steps': [
-                                    {'range': [0, 1], 'color': "#ff4b4b"},
-                                    {'range': [1, 3], 'color': "#ffa421"},
-                                    {'range': [3, 5], 'color': "#21c354"}
-                                ],
-                                'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': rr_ratio}
-                            }
-                        ))
-                        st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Błąd: {e}")
+    # --- TRYB 2: SKANOWANIE CAŁOŚCI ---
+    elif mode == "📋 Skanuj Cały Portfel (Raport)":
+        if st.button("🚀 Uruchom Pełny Skan (Może chwilę potrwać)"):
+            if not sheet_tickers:
+                st.error("Brak tickerów w arkuszu.")
+            else:
+                progress = st.progress(0)
+                for i, t in enumerate(sheet_tickers):
+                    progress.progress((i+1)/len(sheet_tickers))
+                    # Pobieramy dane
+                    try:
+                        data = pobierz_dane_safe(t)
+                        draw_safe_analysis(t, data)
+                    except:
+                        st.warning(f"Błąd danych dla {t}")
+                progress.empty()
+                st.success("Skanowanie zakończone!")
 
 # ==========================================
 # APLIKACJA 3: IRYDOLOGIA
