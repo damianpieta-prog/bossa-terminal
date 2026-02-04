@@ -8,6 +8,7 @@ from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 import google.generativeai as genai 
+from datetime import datetime, timedelta
 
 # ==========================================
 # KONFIGURACJA STRONY
@@ -35,7 +36,12 @@ def load_tickers():
 st.sidebar.title("🎛️ NAWIGACJA")
 st.sidebar.markdown("---")
 app_mode = st.sidebar.selectbox("Wybierz aplikację:", 
-    ["🚀 BOSSA Terminal", "🛡️ Kalkulator Bezpiecznego Inwestora", "👁️ Irydologia AI"]
+    [
+        "🚀 BOSSA Terminal", 
+        "📈 Analiza Trendu (Regresja)", 
+        "🛡️ Kalkulator Bezpiecznego Inwestora", 
+        "👁️ Irydologia AI"
+    ]
 )
 st.sidebar.markdown("---")
 
@@ -157,16 +163,22 @@ if app_mode == "🚀 BOSSA Terminal":
                 with c2:
                     df_chart = row['DataFrame'].tail(150)
                     fig = go.Figure()
-                    fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name='Cena'))
+                    
+                    # --- ZMIANA NA WYKRES LINIOWY ---
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', line=dict(color='black', width=2), name='Cena'))
+                    
+                    # Średnie kroczące
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_9'], line=dict(color='blue', width=1), name='EMA 9'))
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_17'], line=dict(color='orange', width=1), name='EMA 17'))
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_100'], line=dict(color='purple', width=1.5, dash='dot'), name='EMA 100'))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], line=dict(color='black', width=2), name='EMA 200'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], line=dict(color='gray', width=2), name='EMA 200'))
+                    
                     if show_crosses:
                         cross_gold = df_chart[(df_chart['EMA_100'] > df_chart['EMA_200']) & (df_chart['EMA_100'].shift(1) < df_chart['EMA_200'].shift(1))]
                         fig.add_trace(go.Scatter(mode='markers', x=cross_gold.index, y=cross_gold['EMA_100'], marker=dict(color='gold', symbol='diamond', size=12, line=dict(width=2, color='black')), name='Golden Cross'))
                     if "BUY" in row['Signal']: fig.add_hline(y=row['SL'], line_dash="dash", line_color="red")
-                    fig.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20))
+                    
+                    fig.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), showlegend=False)
                     st.plotly_chart(fig, use_container_width=True, key=f"bossa_{row['Ticker']}")
                 with c3:
                     st.write(f"**{row['Risk Note']}**")
@@ -176,6 +188,80 @@ if app_mode == "🚀 BOSSA Terminal":
             st.markdown("<br>", unsafe_allow_html=True)
             st.divider()
     else: st.info("Brak sygnałów.")
+
+# ==========================================
+# APLIKACJA 4: NOWA - REGRESJA LINIOWA (TREND)
+# ==========================================
+elif app_mode == "📈 Analiza Trendu (Regresja)":
+    st.title("📈 Analiza Regresji Liniowej")
+    st.markdown("Narzędzie wyznacza matematyczny trend od wybranej daty dla całego portfela.")
+
+    with st.sidebar:
+        st.header("Ustawienia Regresji")
+        default_start = datetime.now() - timedelta(days=90)
+        start_date = st.date_input("Data początkowa trendu:", value=default_start)
+
+    tickers = load_tickers()
+    if not tickers:
+        st.error("Brak tickerów w arkuszu.")
+        st.stop()
+
+    if st.button("🚀 Oblicz Trend dla wszystkich spółek"):
+        results_reg = []
+        progress = st.progress(0)
+        status = st.empty()
+        start_ts = pd.to_datetime(start_date).tz_localize(None)
+
+        for i, t in enumerate(tickers):
+            status.text(f"Liczenie regresji: {t}...")
+            progress.progress((i+1)/len(tickers))
+            try:
+                df = yf.download(t, period="5y", interval="1d", progress=False)
+                if df is None or df.empty: continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df.index = df.index.tz_localize(None)
+                df_reg = df[df.index >= start_ts].copy()
+
+                if len(df_reg) > 3:
+                    y = df_reg['Close'].values
+                    x = np.arange(len(y))
+                    slope, intercept = np.polyfit(x, y, 1)
+                    trend_line = slope * x + intercept
+                    start_price = trend_line[0]
+                    end_price = trend_line[-1]
+                    trend_pct = ((end_price - start_price) / start_price) * 100
+                    
+                    results_reg.append({
+                        "Ticker": t, "Slope": slope, "ChangePct": trend_pct, 
+                        "Data": df_reg, "TrendLine": trend_line
+                    })
+            except: pass
+
+        progress.empty()
+        status.empty()
+        results_reg.sort(key=lambda x: x['ChangePct'], reverse=True)
+
+        if results_reg:
+            st.success(f"Przeanalizowano {len(results_reg)} spółek.")
+            for res in results_reg:
+                with st.expander(f"{res['Ticker']} | Trend: {res['ChangePct']:.1f}%", expanded=False):
+                    c1, c2 = st.columns([1, 3])
+                    with c1:
+                        st.metric("Zmiana", f"{res['ChangePct']:.2f}%")
+                        st.metric("Nachylenie", f"{res['Slope']:.4f}")
+                        if res['Slope'] > 0: st.success("✅ Trend WZROSTOWY")
+                        else: st.error("🔻 Trend SPADKOWY")
+                    with c2:
+                        df_chart = res['Data']
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', name='Cena', line=dict(color='gray', width=1)))
+                        color_line = 'green' if res['Slope'] > 0 else 'red'
+                        fig.add_trace(go.Scatter(x=df_chart.index, y=res['TrendLine'], mode='lines', name='Linia Trendu', line=dict(color=color_line, width=3)))
+                        fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
+                        st.plotly_chart(fig, use_container_width=True, key=f"reg_{res['Ticker']}")
+        else:
+            st.warning("Brak danych.")
 
 # ==========================================
 # APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA
@@ -255,13 +341,12 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             for r in res_list: draw_card(r)
 
 # ==========================================
-# APLIKACJA 3: IRYDOLOGIA AI (MODEL 2.5 + KLUCZ)
+# APLIKACJA 3: IRYDOLOGIA AI
 # ==========================================
 elif app_mode == "👁️ Irydologia AI":
     st.title("👁️ Irydologia AI (System Wzorców Własnych)")
-    st.markdown("System korzysta z zaawansowanego modelu Gemini 2.5 Flash i Twoich map.")
     
-    # === TWOJE DANE (WPISANE NA SZTYWNO) ===
+    # === TWOJE DANE API ===
     api_key = "AIzaSyB3CYXGVWsouSHuQRo8TF7mh_uT8BuHoQU"
     
     REFERENCE_FILES = [
@@ -276,62 +361,35 @@ elif app_mode == "👁️ Irydologia AI":
 
     if uploaded_file:
         patient_img = Image.open(uploaded_file)
-        
         c1, c2 = st.columns(2)
-        with c1:
-            st.image(patient_img, caption='Oko Pacjenta', use_column_width=True)
-        with c2:
-            st.info(f"System użyje {len(REFERENCE_FILES)} Twoich wzorców do analizy.")
+        with c1: st.image(patient_img, caption='Oko Pacjenta', use_column_width=True)
+        with c2: st.info(f"System użyje {len(REFERENCE_FILES)} Twoich wzorców do analizy.")
         
         if st.button("🔍 URUCHOM ANALIZĘ"):
             genai.configure(api_key=api_key)
-            
-            # --- ZMIANA NA MODEL, KTÓRY JEST U CIEBIE DOSTĘPNY (2.5) ---
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             with st.spinner('AI studiuje Twoje mapy i analizuje pacjenta...'):
                 try:
                     prompt_parts = []
-                    
                     prompt_parts.append("""
-                    Jesteś ekspertem irydologii. Twoim zadaniem jest analiza oka pacjenta,
-                    ściśle opierając się na DOSTARCZONYCH PONIŻEJ WZORCACH i MAPACH.
-                    
-                    Zasady:
-                    1. Użyj 'mapa_irydologiczna' do lokalizacji organów.
-                    2. Użyj 'kryza' i 'twardowka' do oceny struktury i układu nerwowego.
-                    3. Użyj 'konstytucja' do określenia typu budowy.
-                    
-                    Zadanie:
-                    - Zidentyfikuj widoczne znaki (zatoki, psora, pierścienie).
-                    - Zlokalizuj je na mapie organów (np. "Godzina 6:00 - Nerki").
-                    - Postaw diagnozę w punktach.
-                    
-                    OTO TWOJE MATERIAŁY REFERENCYJNE:
+                    Jesteś ekspertem irydologii. Analizuj oko pacjenta PORÓWNUJĄC z WZORCAMI.
+                    Użyj 'mapa_irydologiczna' do lokalizacji organów.
+                    Zidentyfikuj znaki (zatoki, psora) i postaw diagnozę w punktach.
+                    MATERIAŁY REFERENCYJNE:
                     """)
-                    
-                    missing_files = []
                     for filename in REFERENCE_FILES:
                         try:
                             img = Image.open(filename)
                             prompt_parts.append(f"WZORZEC/MAPA: {filename}")
                             prompt_parts.append(img)
-                        except FileNotFoundError:
-                            missing_files.append(filename)
-
-                    if missing_files:
-                        st.error(f"⚠️ Nie znaleziono plików: {', '.join(missing_files)}")
-                        st.stop()
-
-                    prompt_parts.append("--- KONIEC WZORCÓW ---")
+                        except: pass
                     prompt_parts.append("A TERAZ PRZEANALIZUJ TO ZDJĘCIE PACJENTA:")
                     prompt_parts.append(patient_img)
                     
                     response = model.generate_content(prompt_parts)
-                    
                     st.success("Analiza zakończona!")
                     st.markdown("### 📋 Raport Irydologiczny")
                     st.write(response.text)
-                    
                 except Exception as e:
                     st.error(f"Wystąpił błąd: {e}")
