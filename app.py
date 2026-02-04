@@ -7,10 +7,10 @@ from PIL import Image
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
-import google.generativeai as genai # Biblioteka AI
+import google.generativeai as genai 
 
 # ==========================================
-# KONFIGURACJA STRONY (Globalna)
+# KONFIGURACJA STRONY
 # ==========================================
 st.set_page_config(page_title="CENTRUM DOWODZENIA", layout="wide", page_icon="🧠")
 
@@ -43,9 +43,6 @@ st.sidebar.markdown("---")
 # APLIKACJA 1: BOSSA TERMINAL
 # ==========================================
 if app_mode == "🚀 BOSSA Terminal":
-    # (Kod BOSSA Terminal - skrócony dla czytelności, wklej tu pełny kod z poprzedniej wersji jeśli go potrzebujesz,
-    # ale zakładam, że chcesz mieć całość. Wklejam pełny kod poniżej dla pewności)
-    
     RSI_MOMENTUM = 65
     ATR_MULTIPLIER = 2.5
     SL_NORMAL_PCT = 0.015
@@ -185,7 +182,8 @@ if app_mode == "🚀 BOSSA Terminal":
 # ==========================================
 elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
     st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
-    
+    st.write("Strategia: Kupuj, gdy inni się boją (poniżej średniej 200-tygodniowej).")
+
     sheet_tickers = load_tickers()
     mode = st.radio("Tryb:", ["🔍 Pojedyncza Spółka", "📋 Skanuj Cały Portfel"], horizontal=True)
 
@@ -257,86 +255,91 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             for r in res_list: draw_card(r)
 
 # ==========================================
-# APLIKACJA 3: IRYDOLOGIA AI (Z TWOIMI WZORCAMI)
+# APLIKACJA 3: IRYDOLOGIA AI (FIX: PLIKI)
 # ==========================================
 elif app_mode == "👁️ Irydologia AI":
     st.title("👁️ Irydologia AI (System Wzorców Własnych)")
+    st.markdown("Ten system uczy się na podstawie Twoich map i książek, aby lepiej ocenić oko pacjenta.")
     
-    # 1. POLE NA KLUCZ API (Dla bezpieczeństwa wpisujesz go tu, nie w kodzie)
-    api_key = st.text_input("Wpisz swój klucz Google Gemini API:", type="password")
+    # --- INTELIGENTNE POBIERANIE KLUCZA ---
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    else:
+        api_key = st.text_input("🔑 Wpisz swój klucz Google Gemini API:", type="password")
     
-    st.info("System wczyta Twoje pliki: konstytucja.jpeg, teczowka.jpeg, kryza.jpeg itd.")
-
-    uploaded_file = st.file_uploader("Wgraj zdjęcie oka pacjenta...", type=["jpg", "png", "jpeg"])
-    
-    # 2. LISTA TWOICH PLIKÓW (Dokładne nazwy z GitHuba)
+    # 2. LISTA TWOICH PLIKÓW (IDEALNIE ZGODNA Z TWOIM UPLOADEM)
     REFERENCE_FILES = [
         "konstytucja.jpeg",
         "teczowka.jpeg", 
         "twardowka.jpeg",
         "kryza.jpeg",
-        "mapa teczowki.jpeg",
-        "mapa_irydologiczna.jpeg"
+        "mapa_irydologiczna.jpg" # Zmieniłem na .jpg bo tak wgrałeś!
+        # "mapa teczowki.jpeg"   <-- Usunąłem, bo nie widzę tego pliku na Twojej liście!
     ]
 
+    uploaded_file = st.file_uploader("Wgraj zdjęcie oka pacjenta...", type=["jpg", "png", "jpeg"])
+
     if uploaded_file and api_key:
-        # Wyświetl oko pacjenta
         patient_img = Image.open(uploaded_file)
-        st.image(patient_img, caption='Oko Pacjenta', width=400)
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.image(patient_img, caption='Oko Pacjenta', use_column_width=True)
+        with c2:
+            st.info(f"System użyje {len(REFERENCE_FILES)} Twoich wzorców do analizy.")
         
         if st.button("🔍 URUCHOM ANALIZĘ (Z użyciem moich map)"):
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-1.5-flash')
             
-            with st.spinner('Wczytuję Twoje wzorce i analizuję pacjenta...'):
+            with st.spinner('AI studiuje Twoje mapy i analizuje pacjenta...'):
                 try:
-                    # KROK A: Wczytaj Twoje wzorce z dysku serwera
                     prompt_parts = []
                     
-                    # Instrukcja systemowa
                     prompt_parts.append("""
-                    Jesteś ekspertem irydologii. Przeanalizuj zdjęcie oka pacjenta, 
-                    PORÓWNUJĄC je dokładnie z dołączonymi poniżej wzorcami i mapami.
+                    Jesteś ekspertem irydologii. Twoim zadaniem jest analiza oka pacjenta,
+                    ściśle opierając się na DOSTARCZONYCH PONIŻEJ WZORCACH i MAPACH.
                     
-                    Korzystaj z map (mapa_irydologiczna, mapa teczowki), aby zlokalizować organy.
-                    Korzystaj ze wzorców (kryza, konstytucja), aby ocenić strukturę.
+                    Zasady:
+                    1. Użyj 'mapa_irydologiczna' do lokalizacji organów.
+                    2. Użyj 'kryza' i 'twardowka' do oceny struktury i układu nerwowego.
+                    3. Użyj 'konstytucja' do określenia typu budowy.
                     
-                    Twoja diagnoza musi zawierać:
-                    1. Typ konstytucji (wg wzorca 'konstytucja').
-                    2. Stan Kryzy (Autonomiczny Układ Nerwowy) - porównaj ze wzorcem 'kryza'.
-                    3. Analizę Twardówki (jeśli widoczna) - wg wzorca 'twardowka'.
-                    4. Konkretne znaki na mapie organów (Zatoki, Psora, Pierścienie).
+                    Zadanie:
+                    - Zidentyfikuj widoczne znaki (zatoki, psora, pierścienie).
+                    - Zlokalizuj je na mapie organów (np. "Godzina 6:00 - Nerki").
+                    - Postaw diagnozę w punktach.
                     
-                    Oto materiały referencyjne (WZORCE):
+                    OTO TWOJE MATERIAŁY REFERENCYJNE:
                     """)
                     
-                    # Dodajemy każde zdjęcie wzorcowe do zapytania
-                    loaded_refs = 0
+                    loaded_count = 0
+                    missing_files = []
+                    
                     for filename in REFERENCE_FILES:
                         try:
                             img = Image.open(filename)
                             prompt_parts.append(f"WZORZEC/MAPA: {filename}")
                             prompt_parts.append(img)
-                            loaded_refs += 1
+                            loaded_count += 1
                         except FileNotFoundError:
-                            st.warning(f"Nie znaleziono pliku wzorca: {filename} (Sprawdź nazwę na GitHub!)")
+                            missing_files.append(filename)
 
-                    if loaded_refs == 0:
-                        st.error("Nie udało się wczytać żadnych wzorców. Sprawdź, czy pliki są na GitHubie.")
+                    if missing_files:
+                        st.error(f"⚠️ Nie znaleziono plików: {', '.join(missing_files)}")
                         st.stop()
 
                     prompt_parts.append("--- KONIEC WZORCÓW ---")
-                    prompt_parts.append("A TERAZ PRZEANALIZUJ TO OKO PACJENTA:")
+                    prompt_parts.append("A TERAZ PRZEANALIZUJ TO ZDJĘCIE PACJENTA:")
                     prompt_parts.append(patient_img)
                     
-                    # KROK B: Wyślij do Google
                     response = model.generate_content(prompt_parts)
                     
-                    st.success("Analiza zakończona sukcesem!")
+                    st.success("Analiza zakończona!")
                     st.markdown("### 📋 Raport Irydologiczny")
                     st.write(response.text)
                     
                 except Exception as e:
-                    st.error(f"Błąd analizy: {e}")
+                    st.error(f"Wystąpił błąd: {e}")
     elif not api_key:
-        st.warning("👈 Wpisz klucz API w pasku powyżej, aby rozpocząć.")
+        st.warning("👈 Wpisz klucz API (lub skonfiguruj Secrets w Streamlit), aby rozpocząć.")
