@@ -30,15 +30,30 @@ def load_tickers():
         return clean_tickers
     except: return []
 
+# Funkcja pobierająca dane (uniwersalna)
+def get_data_universal(ticker, period="5y"):
+    if ticker == "DAX": ticker = "^GDAXI"
+    if ticker == "WIG20": ticker = "WIG20.WA"
+    try:
+        df = yf.download(ticker, period=period, interval="1d", progress=False)
+        if len(df) < 100: return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        # Usuwamy strefy czasowe dla bezpieczeństwa obliczeń
+        df.index = df.index.tz_localize(None)
+        return df
+    except: return None
+
 # ==========================================
 # 🎛️ MENU GŁÓWNE
 # ==========================================
 st.sidebar.title("🎛️ NAWIGACJA")
 st.sidebar.markdown("---")
-app_mode = st.sidebar.selectbox("Wybierz aplikację:", 
+app_mode = st.sidebar.selectbox("Wybierz moduł:", 
     [
-        "🚀 BOSSA Terminal", 
-        "📈 Analiza Trendu (Regresja 1-3SD)", 
+        "🔍 SZYBKI AUDYT (One-Pager)", 
+        "🚀 BOSSA Terminal (Skaner)", 
+        "📈 Analiza Trendu (Regresja)", 
         "🛡️ Kalkulator Bezpiecznego Inwestora", 
         "👁️ Irydologia AI"
     ]
@@ -46,388 +61,324 @@ app_mode = st.sidebar.selectbox("Wybierz aplikację:",
 st.sidebar.markdown("---")
 
 # ==========================================
-# APLIKACJA 1: BOSSA TERMINAL
+# MODUŁ 1: SZYBKI AUDYT (ONE-PAGER) - NOWOŚĆ
 # ==========================================
-if app_mode == "🚀 BOSSA Terminal":
+if app_mode == "🔍 SZYBKI AUDYT (One-Pager)":
+    st.title("🔍 SZYBKI AUDYT AKTYWA")
+    st.markdown("Zintegrowany panel decyzyjny: BOSSA + Regresja + Bezpieczeństwo na jednym wykresie.")
+
+    tickers = load_tickers()
+    col_input, col_date = st.columns([2, 1])
+    
+    with col_input:
+        selected_ticker = st.selectbox("Wybierz spółkę:", tickers)
+    with col_date:
+        default_start = datetime.now() - timedelta(days=180)
+        start_date = st.date_input("Początek trendu:", value=default_start)
+
+    if st.button("🚀 PRZEŚWIETL SPÓŁKĘ", type="primary"):
+        with st.spinner(f"Analizuję {selected_ticker} pod każdym kątem..."):
+            df = get_data_universal(selected_ticker, period="5y")
+            
+            if df is not None:
+                # --- 1. OBLICZENIA BOSSA ---
+                close = df['Close']
+                current_price = close.iloc[-1]
+                rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
+                ema200 = EMAIndicator(close, window=200).ema_indicator().iloc[-1]
+                ema100 = EMAIndicator(close, window=100).ema_indicator().iloc[-1]
+                
+                # Sygnał BOSSA
+                bossa_signal = "NEUTRAL / WAIT"
+                sl_price = 0.0
+                if rsi >= 65 and current_price > ema200:
+                    bossa_signal = "🟢 MOŻLIWY BUY (Momentum)"
+                    sl_price = current_price * (1 - 0.015) # SL 1.5%
+
+                # --- 2. OBLICZENIA REGRESJI (Logarytmiczna) ---
+                start_ts = pd.to_datetime(start_date)
+                df_reg = df[df.index >= start_ts].copy()
+                
+                reg_status = "Brak danych"
+                trend_pct = 0.0
+                
+                if len(df_reg) > 5:
+                    y = df_reg['Close'].values
+                    x = np.arange(len(y))
+                    y_log = np.log(y)
+                    slope, intercept = np.polyfit(x, y_log, 1)
+                    
+                    # Linie trendu
+                    trend_log = slope * x + intercept
+                    std_dev = np.std(y_log - trend_log)
+                    
+                    trend_line = np.exp(trend_log)
+                    upper_2sd = np.exp(trend_log + 2*std_dev)
+                    lower_2sd = np.exp(trend_log - 2*std_dev)
+                    upper_1sd = np.exp(trend_log + 1*std_dev)
+                    lower_1sd = np.exp(trend_log - 1*std_dev)
+                    
+                    curr_trend = trend_line[-1]
+                    trend_pct = ((current_price - curr_trend)/curr_trend)*100
+                    
+                    if current_price > upper_2sd[-1]: reg_status = "🚨 EKSTREMALNIE DROGO (>2SD)"
+                    elif current_price > upper_1sd[-1]: reg_status = "🔥 DROGO (>1SD)"
+                    elif current_price < lower_2sd[-1]: reg_status = "💎 SUPER OKAZJA (<2SD)"
+                    elif current_price < lower_1sd[-1]: reg_status = "💎 TANIO (<1SD)"
+                    else: reg_status = "⚖️ W NORMIE"
+
+                # --- 3. OBLICZENIA SAFE INVESTOR ---
+                wma_200_val = df['Close'].rolling(window=1000).mean().iloc[-1] # ok. 200 tyg
+                if pd.isna(wma_200_val): wma_200_val = df['Close'].min()
+                safe_dist = ((current_price - wma_200_val)/wma_200_val)*100
+                safe_txt = "BEZPIECZNIE" if safe_dist < 15 else "NEUTRALNIE"
+
+                # ==========================================
+                # DASHBOARD (WIZUALIZACJA)
+                # ==========================================
+                st.divider()
+                
+                # METRYKI
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Cena", f"{current_price:.2f}")
+                m2.metric("Sygnał BOSSA", bossa_signal, delta=f"RSI: {rsi:.1f}")
+                m3.metric("Status Trendu", reg_status, delta=f"{trend_pct:.1f}% od środka", delta_color="inverse")
+                m4.metric("Długi Termin", safe_txt, delta=f"{safe_dist:.1f}% od dna", delta_color="inverse")
+
+                # WYKRES HYBRYDOWY
+                st.subheader(f"📊 Mapa Taktyczna: {selected_ticker}")
+                
+                fig = go.Figure()
+
+                # Tło - Kanały Regresji
+                fig.add_trace(go.Scatter(x=df_reg.index, y=upper_2sd, mode='lines', name='+2 SD (Opór)', line=dict(color='red', width=2, dash='dash')))
+                fig.add_trace(go.Scatter(x=df_reg.index, y=lower_2sd, mode='lines', name='-2 SD (Wsparcie)', line=dict(color='green', width=2, dash='dash')))
+                fig.add_trace(go.Scatter(x=df_reg.index, y=upper_1sd, mode='lines', name='+1 SD', line=dict(color='orange', width=1, dash='dot')))
+                fig.add_trace(go.Scatter(x=df_reg.index, y=lower_1sd, mode='lines', name='-1 SD', line=dict(color='lightgreen', width=1, dash='dot')))
+                fig.add_trace(go.Scatter(x=df_reg.index, y=trend_line, mode='lines', name='TREND (Środek)', line=dict(color='blue', width=2)))
+
+                # Cena
+                fig.add_trace(go.Scatter(x=df_reg.index, y=df_reg['Close'], mode='lines', name='CENA', line=dict(color='black', width=3)))
+
+                # Stop Loss (jeśli jest sygnał)
+                if "BUY" in bossa_signal:
+                    fig.add_hline(y=sl_price, line_dash="solid", line_color="red", annotation_text=f"STOP LOSS: {sl_price:.2f}", annotation_position="bottom right")
+
+                fig.update_layout(height=600, margin=dict(l=10, r=10, t=30, b=10), template="plotly_white")
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.error("Błąd pobierania danych.")
+
+# ==========================================
+# MODUŁ 2: BOSSA TERMINAL (SKANER)
+# ==========================================
+elif app_mode == "🚀 BOSSA Terminal (Skaner)":
+    st.title("🚀 BOSSA TERMINAL")
+    st.write("Skaner całego rynku w poszukiwaniu sygnałów.")
+    
     RSI_MOMENTUM = 65
     ATR_MULTIPLIER = 2.5
     SL_NORMAL_PCT = 0.015
     SL_TIGHT_PCT = 0.006
 
-    def get_data(ticker):
-        if ticker == "DAX": ticker = "^GDAXI"
-        if ticker == "WIG20": ticker = "WIG20.WA"
-        try:
-            df = yf.download(ticker, period="2y", interval="1d", progress=False)
-            if len(df) < 200: return None
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            return df
-        except: return None
-
-    def calculate_signals(df):
+    def calculate_bossa(df):
         close = df['Close']
         ema9 = EMAIndicator(close, window=9).ema_indicator()
         ema17 = EMAIndicator(close, window=17).ema_indicator()
         ema100 = EMAIndicator(close, window=100).ema_indicator()
         ema200 = EMAIndicator(close, window=200).ema_indicator()
         rsi = RSIIndicator(close, window=14).rsi()
-        atr = AverageTrueRange(df['High'], df['Low'], close, window=14).average_true_range()
-        
-        df['EMA_9'] = ema9
-        df['EMA_17'] = ema17
-        df['EMA_100'] = ema100
-        df['EMA_200'] = ema200
-
-        y = close.tail(50).values
-        x = np.arange(len(y))
-        coef = np.polyfit(x, y, 1)
-        lin_reg = np.poly1d(coef)(x)
-        std_dev = np.std(y - lin_reg)
         
         current_price = close.iloc[-1]
-        keltner_upper = EMAIndicator(close, window=20).ema_indicator().iloc[-1] + (atr.iloc[-1] * ATR_MULTIPLIER)
         
         signal = "WAIT"
-        risk_note = "Neutral"
         sl_price = 0.0
         
-        is_trend = current_price > ema200.iloc[-1] and ema100.iloc[-1] > ema200.iloc[-1]
-        is_momentum = rsi.iloc[-1] >= RSI_MOMENTUM
-        
-        if is_trend and is_momentum:
-            if current_price > keltner_upper:
-                signal = "⚠️ BUY (HIGH RISK)"
-                risk_note = "Cena > ATR"
-                sl_price = current_price * (1 - SL_TIGHT_PCT)
-            else:
-                signal = "🟢 BUY (MOMENTUM)"
-                space = ((keltner_upper - current_price) / current_price) * 100
-                risk_note = f"Zapas ATR: {space:.1f}%"
-                sl_price = current_price * (1 - SL_NORMAL_PCT)
+        # Prosta logika
+        if rsi.iloc[-1] >= RSI_MOMENTUM and current_price > ema200.iloc[-1]:
+            signal = "🟢 BUY"
+            sl_price = current_price * (1 - SL_NORMAL_PCT)
 
         return {
-            "Price": current_price, "RSI": rsi.iloc[-1], "Signal": signal,
-            "Risk Note": risk_note, "SL": sl_price,
-            "DataFrame": df, "Reg_Last": lin_reg[-1], "Reg_Upper": lin_reg[-1] + (2*std_dev)
+            "Price": current_price, "RSI": rsi.iloc[-1], "Signal": signal, "SL": sl_price,
+            "DataFrame": df, "EMA9": ema9, "EMA17": ema17, "EMA100": ema100, "EMA200": ema200
         }
 
-    st.title("🚀 BOSSA 3.3 TERMINAL")
-    with st.sidebar:
-        st.header("Ustawienia Terminala")
-        capital = st.number_input("Kapitał (PLN/USD)", 10000, step=1000)
-        risk_pct = st.slider("Ryzyko (%)", 0.5, 5.0, 1.0) / 100
-        show_all = st.checkbox("Pokaż wszystkie (nawet WAIT)", False)
-        show_crosses = st.checkbox("Pokaż przecięcia EMA", True)
-
     tickers = load_tickers()
-    if not tickers:
-        st.error("Brak tickerów. Sprawdź link do arkusza.")
-        st.stop()
-
-    results = []
-    progress = st.progress(0)
-    status = st.empty()
-    
-    for i, t in enumerate(tickers):
-        status.text(f"Pobieram: {t}...")
-        progress.progress((i+1)/len(tickers))
-        df = get_data(t)
-        if df is not None:
-            try:
-                res = calculate_signals(df)
-                res['Ticker'] = t
-                results.append(res)
-            except: pass
-    progress.empty()
-    status.empty()
-    
-    res_df = pd.DataFrame(results)
-    if not show_all: final_df = res_df[res_df['Signal'].str.contains("BUY")]
-    else: final_df = res_df
-
-    if not final_df.empty:
-        for idx, row in final_df.iterrows():
-            with st.expander(f"{row['Ticker']} | {row['Signal']}", expanded=True):
-                c1, c2, c3 = st.columns([1,2,1])
+    if st.button("🚀 Skanuj Rynek"):
+        results = []
+        prog = st.progress(0)
+        
+        for i, t in enumerate(tickers):
+            prog.progress((i+1)/len(tickers))
+            df = get_data_universal(t, period="2y")
+            if df is not None:
+                try:
+                    res = calculate_bossa(df)
+                    res['Ticker'] = t
+                    if "BUY" in res['Signal']: results.append(res)
+                except: pass
+        prog.empty()
+        
+        if results:
+            st.success(f"Znaleziono {len(results)} okazji.")
+            for row in results:
+                # WYSWIETLANIE BEZ ROZWIJANIA (OD RAZU WIDOCZNE)
+                st.container()
+                st.markdown(f"### {row['Ticker']} | Cena: {row['Price']:.2f}")
+                
+                c1, c2 = st.columns([1, 4])
                 with c1:
-                    st.metric("Cena", f"{row['Price']:.2f}")
-                    st.write(f"RSI: **{row['RSI']:.1f}**")
-                    if "BUY" in row['Signal']:
-                        st.write(f"Stop Loss: **{row['SL']:.2f}**")
-                        risk_amount = capital * risk_pct
-                        dist = row['Price'] - row['SL']
-                        if dist > 0:
-                            qty = risk_amount / dist
-                            st.info(f"Kup: **{int(qty)} szt.**\n(Ryzyko: {risk_amount:.0f})")
+                    st.metric("Sygnał", row['Signal'])
+                    st.metric("Stop Loss", f"{row['SL']:.2f}")
+                    st.metric("RSI", f"{row['RSI']:.1f}")
+                
                 with c2:
                     df_chart = row['DataFrame'].tail(150)
                     fig = go.Figure()
-                    
-                    # WYKRES LINIOWY
+                    # LINIOWY
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', line=dict(color='black', width=2), name='Cena'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=row['EMA9'].tail(150), line=dict(color='blue', width=1), name='EMA 9'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=row['EMA200'].tail(150), line=dict(color='gray', width=2), name='EMA 200'))
                     
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_9'], line=dict(color='blue', width=1), name='EMA 9'))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_17'], line=dict(color='orange', width=1), name='EMA 17'))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_100'], line=dict(color='purple', width=1.5, dash='dot'), name='EMA 100'))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], line=dict(color='gray', width=2), name='EMA 200'))
-                    
-                    if show_crosses:
-                        cross_gold = df_chart[(df_chart['EMA_100'] > df_chart['EMA_200']) & (df_chart['EMA_100'].shift(1) < df_chart['EMA_200'].shift(1))]
-                        fig.add_trace(go.Scatter(mode='markers', x=cross_gold.index, y=cross_gold['EMA_100'], marker=dict(color='gold', symbol='diamond', size=12, line=dict(width=2, color='black')), name='Golden Cross'))
-                    if "BUY" in row['Signal']: fig.add_hline(y=row['SL'], line_dash="dash", line_color="red")
-                    
-                    fig.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), showlegend=False)
+                    fig.add_hline(y=row['SL'], line_dash="dash", line_color="red")
+                    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
                     st.plotly_chart(fig, use_container_width=True, key=f"bossa_{row['Ticker']}")
-                with c3:
-                    st.write(f"**{row['Risk Note']}**")
-                    diff = ((row['Price'] - row['Reg_Last'])/row['Reg_Last'])*100
-                    if diff > 0: st.write(f"📈 +{diff:.1f}%")
-                    else: st.write(f"📉 {diff:.1f}%")
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.divider()
-    else: st.info("Brak sygnałów.")
+                st.divider()
+        else:
+            st.warning("Brak sygnałów kupna.")
 
 # ==========================================
-# APLIKACJA 4: REGRESJA LINIOWA + KANAŁY 1, 2 i 3 SD (LOG)
+# MODUŁ 3: REGRESJA (ANALIZA TRENDU)
 # ==========================================
-elif app_mode == "📈 Analiza Trendu (Regresja 1-3SD)":
-    st.title("📈 Analiza Trendu (Regresja 1SD, 2SD, 3SD)")
-    st.markdown("""
-    **Legenda:**
-    - 🔵 **Linia ciągła:** Główny Trend
-    - 🔴/🟢 **Linia przerywana (Dash):** 2 Odchylenia (Silny opór/wsparcie)
-    - 🔴/🟢 **Linia kropkowana (Dot):** 1 Odchylenie (Normalny zakres)
-    """)
-
+elif app_mode == "📈 Analiza Trendu (Regresja)":
+    st.title("📈 Analiza Trendu (Kanały 1SD - 3SD)")
+    
     with st.sidebar:
-        st.header("Ustawienia Trendu")
-        default_start = datetime.now() - timedelta(days=180) # Domyślnie pół roku
+        default_start = datetime.now() - timedelta(days=180)
         start_date = st.date_input("Początek trendu:", value=default_start)
 
     tickers = load_tickers()
-    if not tickers:
-        st.error("Brak tickerów w arkuszu.")
-        st.stop()
-
     if st.button("🚀 Oblicz Kanały Regresji"):
         results_reg = []
-        progress = st.progress(0)
-        status = st.empty()
-        start_ts = pd.to_datetime(start_date).tz_localize(None)
+        prog = st.progress(0)
+        start_ts = pd.to_datetime(start_date)
 
         for i, t in enumerate(tickers):
-            status.text(f"Analiza: {t}...")
-            progress.progress((i+1)/len(tickers))
-            try:
-                df = yf.download(t, period="5y", interval="1d", progress=False)
-                if df is None or df.empty: continue
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df.index = df.index.tz_localize(None)
-                df_reg = df[df.index >= start_ts].copy()
+            prog.progress((i+1)/len(tickers))
+            df = get_data_universal(t, period="5y")
+            if df is not None:
+                try:
+                    df_reg = df[df.index >= start_ts].copy()
+                    if len(df_reg) > 5:
+                        y = df_reg['Close'].values
+                        x = np.arange(len(y))
+                        y_log = np.log(y)
+                        slope, intercept = np.polyfit(x, y_log, 1)
+                        trend_log = slope * x + intercept
+                        std_dev = np.std(y_log - trend_log)
+                        
+                        trend_line = np.exp(trend_log)
+                        upper_2sd = np.exp(trend_log + 2*std_dev)
+                        lower_2sd = np.exp(trend_log - 2*std_dev)
+                        upper_1sd = np.exp(trend_log + 1*std_dev)
+                        lower_1sd = np.exp(trend_log - 1*std_dev)
+                        upper_3sd = np.exp(trend_log + 3*std_dev)
+                        
+                        curr = y[-1]
+                        dist = ((curr - trend_line[-1])/trend_line[-1])*100
+                        
+                        extreme_note = ""
+                        if curr > upper_2sd[-1]:
+                            dist3 = ((upper_3sd[-1] - curr)/curr)*100
+                            extreme_note = f"⚠️ UWAGA: Przebito 2SD! Do 3SD zostało {dist3:.1f}%"
 
-                if len(df_reg) > 5:
-                    # 1. Przygotowanie danych (LOGARYTMICZNE)
-                    y = df_reg['Close'].values
-                    x = np.arange(len(y))
-                    y_log = np.log(y)
-                    
-                    # 2. Obliczenie Regresji na logarytmach
-                    slope, intercept = np.polyfit(x, y_log, 1)
-                    
-                    # 3. Wyznaczenie linii trendu (log)
-                    trend_log = slope * x + intercept
-                    
-                    # 4. Obliczenie odchylenia standardowego
-                    std_dev = np.std(y_log - trend_log)
-                    
-                    # 5. Wyznaczenie kanałów (Logarytmicznie)
-                    # 2 SD
-                    upper_2sd_log = trend_log + (2 * std_dev)
-                    lower_2sd_log = trend_log - (2 * std_dev)
-                    # 1 SD
-                    upper_1sd_log = trend_log + (1 * std_dev)
-                    lower_1sd_log = trend_log - (1 * std_dev)
-                    # 3 SD (Dla analizy extreme)
-                    upper_3sd_log = trend_log + (3 * std_dev)
-                    lower_3sd_log = trend_log - (3 * std_dev)
-                    
-                    # 6. Powrót do ceny (EXP)
-                    trend_line = np.exp(trend_log)
-                    
-                    upper_2sd = np.exp(upper_2sd_log)
-                    lower_2sd = np.exp(lower_2sd_log)
-                    
-                    upper_1sd = np.exp(upper_1sd_log)
-                    lower_1sd = np.exp(lower_1sd_log)
-                    
-                    upper_3sd = np.exp(upper_3sd_log)
-                    lower_3sd = np.exp(lower_3sd_log)
-                    
-                    # Ocena sytuacji
-                    current_price = y[-1]
-                    current_trend = trend_line[-1]
-                    
-                    # Dystans do trendu w %
-                    dist_to_trend = ((current_price - current_trend) / current_trend) * 100
-                    
-                    # Status Extreme (czy przebija 2SD i czy blisko 3SD)
-                    extreme_note = ""
-                    if current_price > upper_2sd[-1]:
-                        dist_to_3sd = upper_3sd[-1] - current_price
-                        if dist_to_3sd <= 0: extreme_note = "🚀 CENA POWYŻEJ 3 SD! (MEGA BAŃKA)"
-                        else: extreme_note = f"⚠️ Powyżej 2 SD. Do 3 SD brakuje {(dist_to_3sd/current_price)*100:.1f}%"
-                    elif current_price < lower_2sd[-1]:
-                        dist_to_3sd = current_price - lower_3sd[-1]
-                        if dist_to_3sd <= 0: extreme_note = "🩸 CENA PONIŻEJ 3 SD! (MEGA KRACH)"
-                        else: extreme_note = f"⚠️ Poniżej 2 SD. Do 3 SD brakuje {(dist_to_3sd/current_price)*100:.1f}%"
-                    
-                    results_reg.append({
-                        "Ticker": t,
-                        "Slope": slope,
-                        "DistPct": dist_to_trend,
-                        "Data": df_reg,
-                        "TrendLine": trend_line,
-                        "Upper2SD": upper_2sd, "Lower2SD": lower_2sd,
-                        "Upper1SD": upper_1sd, "Lower1SD": lower_1sd,
-                        "ExtremeNote": extreme_note
-                    })
-            except: pass
-
-        progress.empty()
-        status.empty()
+                        results_reg.append({
+                            "Ticker": t, "DistPct": dist, "Data": df_reg, "Trend": trend_line,
+                            "U2": upper_2sd, "L2": lower_2sd, "U1": upper_1sd, "L1": lower_1sd,
+                            "Note": extreme_note
+                        })
+                except: pass
+        prog.empty()
         
-        # Sortowanie
         results_reg.sort(key=lambda x: x['DistPct'], reverse=True)
-
-        if results_reg:
-            st.success(f"Analiza {len(results_reg)} spółek zakończona.")
+        
+        for res in results_reg:
+            st.container()
+            header = f"{res['Ticker']} | Odchylenie: {res['DistPct']:.1f}%"
+            if res['Note']: header += f" | {res['Note']}"
             
-            # --- PĘTLA PO WYNIKACH (BEZ EXPANDERA - OD RAZU WIDOCZNE) ---
-            for res in results_reg:
-                st.container()
-                
-                # Nagłówek wizualny
-                header_text = f"{res['Ticker']} | Odchylenie: {res['DistPct']:.1f}%"
-                if res['ExtremeNote']:
-                    header_text += f" | {res['ExtremeNote']}"
-                
-                st.markdown(f"#### {header_text}")
-
-                c1, c2 = st.columns([1, 4])
-                with c1:
-                    st.metric("Cena", f"{res['Data']['Close'].iloc[-1]:.2f}")
-                    st.metric("Odchylenie %", f"{res['DistPct']:.2f}%")
-                    if res['ExtremeNote']:
-                        st.error(res['ExtremeNote'])
-                    else:
-                        st.info("Cena w normie (<2SD)")
-                
-                with c2:
-                    df_chart = res['Data']
-                    fig = go.Figure()
-                    
-                    # 2 SD (Dash)
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Upper2SD'], mode='lines', name='+2 SD', line=dict(color='red', width=1, dash='dash')))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Lower2SD'], mode='lines', name='-2 SD', line=dict(color='green', width=1, dash='dash')))
-                    
-                    # 1 SD (Dot - Dodatek)
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Upper1SD'], mode='lines', name='+1 SD', line=dict(color='red', width=1, dash='dot')))
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Lower1SD'], mode='lines', name='-1 SD', line=dict(color='green', width=1, dash='dot')))
-                    
-                    # Trend
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['TrendLine'], mode='lines', name='Trend', line=dict(color='blue', width=2)))
-                    
-                    # Cena
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', name='Cena', line=dict(color='black', width=2)))
-
-                    fig.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10))
-                    st.plotly_chart(fig, use_container_width=True, key=f"reg2sd_{res['Ticker']}")
-                
-                st.markdown("---") # Linia oddzielająca spółki
-        else:
-            st.warning("Brak danych.")
+            st.markdown(f"#### {header}")
+            
+            c1, c2 = st.columns([1, 4])
+            with c1:
+                st.metric("Cena", f"{res['Data']['Close'].iloc[-1]:.2f}")
+                st.metric("Odchylenie", f"{res['DistPct']:.1f}%")
+                if res['Note']: st.error(res['Note'])
+            
+            with c2:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['U2'], mode='lines', line=dict(color='red', width=1, dash='dash'), name='+2SD'))
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['L2'], mode='lines', line=dict(color='green', width=1, dash='dash'), name='-2SD'))
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['U1'], mode='lines', line=dict(color='orange', width=1, dash='dot'), name='+1SD'))
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['L1'], mode='lines', line=dict(color='lightgreen', width=1, dash='dot'), name='-1SD'))
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['Trend'], mode='lines', line=dict(color='blue', width=2), name='Trend'))
+                fig.add_trace(go.Scatter(x=res['Data'].index, y=res['Data']['Close'], mode='lines', line=dict(color='black', width=2), name='Cena'))
+                fig.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True, key=f"reg_{res['Ticker']}")
+            st.divider()
 
 # ==========================================
-# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA
+# MODUŁ 4: SAFE INVESTOR
 # ==========================================
 elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
     st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
-    st.write("Strategia: Kupuj, gdy inni się boją (poniżej średniej 200-tygodniowej).")
-
-    sheet_tickers = load_tickers()
-    mode = st.radio("Tryb:", ["🔍 Pojedyncza Spółka", "📋 Skanuj Cały Portfel"], horizontal=True)
-
-    @st.cache_data(ttl=600)
-    def pobierz_dane_safe(symbol_aktywa):
-        if symbol_aktywa == "GOLD": symbol_aktywa = "GLD"
-        ticker = yf.Ticker(symbol_aktywa)
-        df = ticker.history(period="5y", interval="1wk")
-        return df
-
-    def analyze_ticker(symbol, data):
-        if data.empty: return None
-        current_price = data['Close'].iloc[-1]
-        wma_200 = data['Close'].rolling(window=200).mean().iloc[-1]
-        if pd.isna(wma_200): wma_200 = data['Close'].min()
-        ath = data['High'].max()
-        reward_ceiling = max(ath, current_price * 1.1)
-        upside = reward_ceiling - current_price
-        downside = current_price - wma_200
-        score = 0
-        if downside <= 0:
-            rr_ratio = 10.0; verdict = "OKAZJA ŻYCIA"; color = "#21c354"; score = 100 + abs(downside)
-        else:
-            rr_ratio = upside / downside; score = rr_ratio
-            if rr_ratio > 3: verdict = "OKAZJA"; color = "#21c354"
-            elif rr_ratio > 1: verdict = "NEUTRALNIE"; color = "#ffa421"
-            else: verdict = "NIEOPŁACALNE"; color = "#ff4b4b"
-        return {"symbol": symbol, "price": current_price, "verdict": verdict, "color": color, "floor": wma_200, "downside": downside, "rr": rr_ratio, "score": score}
-
-    def draw_card(r):
-        with st.container():
-            st.markdown(f"### {r['symbol']}")
+    tickers = load_tickers()
+    
+    if st.button("🚀 Skanuj Rynek"):
+        results = []
+        prog = st.progress(0)
+        for i, t in enumerate(tickers):
+            prog.progress((i+1)/len(tickers))
+            df = get_data_universal(t, period="5y")
+            if df is not None:
+                try:
+                    curr = df['Close'].iloc[-1]
+                    wma200 = df['Close'].rolling(1000).mean().iloc[-1]
+                    if pd.isna(wma200): wma200 = df['Close'].min()
+                    
+                    downside = curr - wma200
+                    score = 0
+                    if downside <= 0: score = 100 + abs(downside) # Okazja życia
+                    else: score = (curr*1.1 - curr) / downside # RR
+                    
+                    results.append({"Ticker": t, "Price": curr, "Floor": wma200, "Score": score})
+                except: pass
+        prog.empty()
+        
+        results.sort(key=lambda x: x['Score'], reverse=True)
+        
+        for res in results:
+            col = "green" if res['Price'] < res['Floor'] else "orange"
+            st.markdown(f"### {res['Ticker']}")
             c1, c2 = st.columns([1, 2])
-            with c1:
-                st.metric("Cena", f"{r['price']:,.2f}")
-                st.markdown(f"**<span style='color:{r['color']}'>{r['verdict']}</span>**", unsafe_allow_html=True)
-                st.metric("Bezpieczne Dno", f"{r['floor']:,.2f}", delta=f"-{r['downside']:,.2f}", delta_color="inverse")
+            c1.metric("Cena", f"{res['Price']:.2f}")
+            c1.metric("Bezpieczne Dno", f"{res['Floor']:.2f}", delta=f"{res['Price']-res['Floor']:.2f}", delta_color="inverse")
+            
             with c2:
                 fig = go.Figure(go.Indicator(
-                    mode = "gauge+number", value = r['rr'],
-                    gauge = {'axis': {'range': [0, 5]}, 'steps': [{'range': [0, 1], 'color': "#ff4b4b"}, {'range': [1, 3], 'color': "#ffa421"}, {'range': [3, 5], 'color': "#21c354"}]}
+                    mode = "gauge+number", value = res['Score'],
+                    title = {'text': "Atrakcyjność"},
+                    gauge = {'axis': {'range': [0, 5]}, 'bar': {'color': "black"},
+                             'steps': [{'range': [0, 1], 'color': "#ff4b4b"}, {'range': [1, 5], 'color': "#21c354"}]}
                 ))
-                fig.update_layout(height=200, margin=dict(l=20,r=20,t=30,b=20))
-                st.plotly_chart(fig, use_container_width=True, key=f"safe_{r['symbol']}")
-            st.markdown("<br>", unsafe_allow_html=True)
+                fig.update_layout(height=150, margin=dict(l=20,r=20,t=30,b=20))
+                st.plotly_chart(fig, use_container_width=True, key=f"safe_{res['Ticker']}")
             st.divider()
 
-    if mode == "🔍 Pojedyncza Spółka":
-        sym = st.selectbox("Wybierz:", sheet_tickers) if sheet_tickers else st.text_input("Symbol:", "BTC-USD")
-        if sym:
-            with st.spinner("Analizuję..."):
-                d = pobierz_dane_safe(sym)
-                res = analyze_ticker(sym, d)
-                if res: draw_card(res)
-
-    elif mode == "📋 Skanuj Cały Portfel":
-        if st.button("🚀 Skanuj (Sortuj wg okazji)"):
-            res_list = []
-            prog = st.progress(0)
-            for i, t in enumerate(sheet_tickers):
-                prog.progress((i+1)/len(sheet_tickers))
-                try:
-                    d = pobierz_dane_safe(t)
-                    r = analyze_ticker(t, d)
-                    if r: res_list.append(r)
-                except: pass
-            prog.empty()
-            res_list.sort(key=lambda x: x['score'], reverse=True)
-            for r in res_list: draw_card(r)
-
 # ==========================================
-# APLIKACJA 3: IRYDOLOGIA AI
+# MODUŁ 5: IRYDOLOGIA AI
 # ==========================================
 elif app_mode == "👁️ Irydologia AI":
     st.title("👁️ Irydologia AI (System Wzorców Własnych)")
