@@ -198,7 +198,7 @@ if app_mode == "🚀 BOSSA Terminal":
         st.info("Brak sygnałów kupna w Twoim portfelu.")
 
 # ==========================================
-# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Sorted)
+# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Ze zwiększonym odstępem)
 # ==========================================
 elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
     st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
@@ -214,7 +214,6 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
         df = ticker.history(period="5y", interval="1wk")
         return df
 
-    # Funkcja do analizy (zwraca słownik danych)
     def analyze_ticker(symbol, data):
         if data.empty: return None
 
@@ -234,10 +233,10 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             rr_ratio = 10.0
             verdict = "OKAZJA ŻYCIA"
             color = "#21c354"
-            score = 100 + abs(downside) # Najwyższy priorytet dla "Okazji Życia"
+            score = 100 + abs(downside)
         else:
             rr_ratio = upside / downside
-            score = rr_ratio # Priorytetem jest R:R
+            score = rr_ratio
             if rr_ratio > 3:
                 verdict = "OKAZJA (KUPUJ)"
                 color = "#21c354"
@@ -253,7 +252,7 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
             "floor": risk_floor, "downside": downside, "rr": rr_ratio, "score": score
         }
 
-    # Funkcja rysująca kartę
+    # Funkcja rysująca kartę z WIĘKSZYM ODSTĘPEM
     def draw_card(r):
         with st.container():
             st.markdown(f"### {r['symbol']}")
@@ -272,8 +271,12 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
                         'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': r['rr']}
                     }
                 ))
-                fig.update_layout(height=200, margin=dict(l=20,r=20,t=30,b=20))
-                st.plotly_chart(fig, use_container_width=True)
+                # Zwiększone marginesy wykresu (top/bottom)
+                fig.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20))
+                st.plotly_chart(fig, use_container_width=True, key=f"chart_{r['symbol']}")
+            
+            # --- DODATKOWY ODSTĘP WIZUALNY ---
+            st.markdown("<br>", unsafe_allow_html=True) 
             st.divider()
 
     # --- TRYB 1: POJEDYNCZY ---
@@ -299,7 +302,6 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
                 progress = st.progress(0)
                 status = st.empty()
                 
-                # 1. Pobieranie i Obliczanie
                 for i, t in enumerate(sheet_tickers):
                     status.text(f"Analizuję: {t}...")
                     progress.progress((i+1)/len(sheet_tickers))
@@ -312,11 +314,8 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
                 progress.empty()
                 status.empty()
 
-                # 2. Sortowanie (Najlepsze wyniki na górze)
-                # Sortujemy po polu 'score' malejąco
                 scan_results.sort(key=lambda x: x['score'], reverse=True)
 
-                # 3. Wyświetlanie
                 if scan_results:
                     st.success(f"Znaleziono {len(scan_results)} spółek. Oto ranking:")
                     for res in scan_results:
