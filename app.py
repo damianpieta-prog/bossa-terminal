@@ -14,7 +14,7 @@ from ta.volatility import AverageTrueRange
 st.set_page_config(page_title="CENTRUM DOWODZENIA", layout="wide", page_icon="🧠")
 
 # ==========================================
-# 📥 FUNKCJE GLOBALNE (Dostępne dla każdej aplikacji)
+# 📥 FUNKCJE GLOBALNE
 # ==========================================
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1zAE2mUbcVwBfI78f7v3_4K20Z5ffXymyrIcqcyadF4M/export?format=csv&gid=0"
 
@@ -198,32 +198,25 @@ if app_mode == "🚀 BOSSA Terminal":
         st.info("Brak sygnałów kupna w Twoim portfelu.")
 
 # ==========================================
-# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Wersja 2.0 - Arkusz)
+# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Sorted)
 # ==========================================
 elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
     st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
     st.write("Strategia: Kupuj, gdy inni się boją (poniżej średniej 200-tygodniowej).")
 
-    # Pobierz tickery z arkusza
     sheet_tickers = load_tickers()
-    
-    # Wybór trybu pracy
     mode = st.radio("Tryb analizy:", ["🔍 Pojedyncza Spółka", "📋 Skanuj Cały Portfel (Raport)"], horizontal=True)
 
     @st.cache_data(ttl=600)
     def pobierz_dane_safe(symbol_aktywa):
-        # Mapowanie dla złota/ropy jeśli ktoś wpisze dziwnie
         if symbol_aktywa == "GOLD": symbol_aktywa = "GLD"
-        
         ticker = yf.Ticker(symbol_aktywa)
         df = ticker.history(period="5y", interval="1wk")
         return df
 
-    # --- FUNKCJA RYSUJĄCA KAFE ---
-    def draw_safe_analysis(symbol, data):
-        if data.empty:
-            st.error(f"Brak danych dla {symbol}")
-            return False
+    # Funkcja do analizy (zwraca słownik danych)
+    def analyze_ticker(symbol, data):
+        if data.empty: return None
 
         current_price = data['Close'].iloc[-1]
         wma_200 = data['Close'].rolling(window=200).mean().iloc[-1]
@@ -236,13 +229,15 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
         upside = reward_ceiling - current_price
         downside = current_price - risk_floor
         
-        # Logika werdyktu
+        score = 0
         if downside <= 0:
-            rr_ratio = 5.0 # Max scale
+            rr_ratio = 10.0
             verdict = "OKAZJA ŻYCIA"
             color = "#21c354"
+            score = 100 + abs(downside) # Najwyższy priorytet dla "Okazji Życia"
         else:
             rr_ratio = upside / downside
+            score = rr_ratio # Priorytetem jest R:R
             if rr_ratio > 3:
                 verdict = "OKAZJA (KUPUJ)"
                 color = "#21c354"
@@ -253,64 +248,81 @@ elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
                 verdict = "NIEOPŁACALNE"
                 color = "#ff4b4b"
         
-        # Wyświetlanie
+        return {
+            "symbol": symbol, "price": current_price, "verdict": verdict, "color": color,
+            "floor": risk_floor, "downside": downside, "rr": rr_ratio, "score": score
+        }
+
+    # Funkcja rysująca kartę
+    def draw_card(r):
         with st.container():
-            st.markdown(f"### {symbol}")
+            st.markdown(f"### {r['symbol']}")
             c1, c2 = st.columns([1, 2])
             with c1:
-                st.metric("Cena", f"{current_price:,.2f}")
-                st.markdown(f"Werdykt: **<span style='color:{color}'>{verdict}</span>**", unsafe_allow_html=True)
-                st.metric("Bezpieczne Dno", f"{risk_floor:,.2f}", delta=f"-{downside:,.2f}", delta_color="inverse")
+                st.metric("Cena", f"{r['price']:,.2f}")
+                st.markdown(f"Werdykt: **<span style='color:{r['color']}'>{r['verdict']}</span>**", unsafe_allow_html=True)
+                st.metric("Bezpieczne Dno", f"{r['floor']:,.2f}", delta=f"-{r['downside']:,.2f}", delta_color="inverse")
             with c2:
                 fig = go.Figure(go.Indicator(
-                    mode = "gauge+number", value = rr_ratio,
+                    mode = "gauge+number", value = r['rr'],
                     title = {'text': "Zysk/Ryzyko"},
                     gauge = {
-                        'axis': {'range': [0, 5]},
-                        'bar': {'color': "black"},
-                        'steps': [
-                            {'range': [0, 1], 'color': "#ff4b4b"},
-                            {'range': [1, 3], 'color': "#ffa421"},
-                            {'range': [3, 5], 'color': "#21c354"}
-                        ],
-                        'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': rr_ratio}
+                        'axis': {'range': [0, 5]}, 'bar': {'color': "black"},
+                        'steps': [{'range': [0, 1], 'color': "#ff4b4b"}, {'range': [1, 3], 'color': "#ffa421"}, {'range': [3, 5], 'color': "#21c354"}],
+                        'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': r['rr']}
                     }
                 ))
                 fig.update_layout(height=200, margin=dict(l=20,r=20,t=30,b=20))
                 st.plotly_chart(fig, use_container_width=True)
             st.divider()
-        return True
 
     # --- TRYB 1: POJEDYNCZY ---
     if mode == "🔍 Pojedyncza Spółka":
-        # Selectbox z tickerami z arkusza + opcja wpisania
         if sheet_tickers:
             symbol = st.selectbox("Wybierz walor z listy:", sheet_tickers)
         else:
             symbol = st.text_input("Wpisz symbol (np. BTC-USD):", value="BTC-USD")
-
         if symbol:
             with st.spinner(f"Analizuję {symbol}..."):
                 data = pobierz_dane_safe(symbol)
-                draw_safe_analysis(symbol, data)
+                res = analyze_ticker(symbol, data)
+                if res: draw_card(res)
+                else: st.error("Brak danych.")
 
-    # --- TRYB 2: SKANOWANIE CAŁOŚCI ---
+    # --- TRYB 2: SKANOWANIE (SORTOWANE) ---
     elif mode == "📋 Skanuj Cały Portfel (Raport)":
-        if st.button("🚀 Uruchom Pełny Skan (Może chwilę potrwać)"):
+        if st.button("🚀 Uruchom Pełny Skan (Sortuj od najlepszych)"):
             if not sheet_tickers:
-                st.error("Brak tickerów w arkuszu.")
+                st.error("Brak tickerów.")
             else:
+                scan_results = []
                 progress = st.progress(0)
+                status = st.empty()
+                
+                # 1. Pobieranie i Obliczanie
                 for i, t in enumerate(sheet_tickers):
+                    status.text(f"Analizuję: {t}...")
                     progress.progress((i+1)/len(sheet_tickers))
-                    # Pobieramy dane
                     try:
                         data = pobierz_dane_safe(t)
-                        draw_safe_analysis(t, data)
-                    except:
-                        st.warning(f"Błąd danych dla {t}")
+                        res = analyze_ticker(t, data)
+                        if res: scan_results.append(res)
+                    except: pass
+                
                 progress.empty()
-                st.success("Skanowanie zakończone!")
+                status.empty()
+
+                # 2. Sortowanie (Najlepsze wyniki na górze)
+                # Sortujemy po polu 'score' malejąco
+                scan_results.sort(key=lambda x: x['score'], reverse=True)
+
+                # 3. Wyświetlanie
+                if scan_results:
+                    st.success(f"Znaleziono {len(scan_results)} spółek. Oto ranking:")
+                    for res in scan_results:
+                        draw_card(res)
+                else:
+                    st.warning("Brak danych.")
 
 # ==========================================
 # APLIKACJA 3: IRYDOLOGIA
