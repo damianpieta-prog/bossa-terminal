@@ -8,7 +8,9 @@ from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 
-# === KONFIGURACJA STRONY ===
+# ==========================================
+# KONFIGURACJA STRONY (Globalna)
+# ==========================================
 st.set_page_config(page_title="CENTRUM DOWODZENIA", layout="wide", page_icon="🧠")
 
 # ==========================================
@@ -17,12 +19,12 @@ st.set_page_config(page_title="CENTRUM DOWODZENIA", layout="wide", page_icon="�
 st.sidebar.title("🎛️ NAWIGACJA")
 st.sidebar.markdown("---")
 app_mode = st.sidebar.selectbox("Wybierz aplikację:", 
-    ["🚀 BOSSA Terminal", "⚖️ Kalkulator Ryzyka (R/R)", "👁️ Irydologia AI"]
+    ["🚀 BOSSA Terminal", "🛡️ Kalkulator Bezpiecznego Inwestora", "👁️ Irydologia AI"]
 )
 st.sidebar.markdown("---")
 
 # ==========================================
-# APLIKACJA 1: BOSSA TERMINAL
+# APLIKACJA 1: BOSSA TERMINAL (Daytrading)
 # ==========================================
 if app_mode == "🚀 BOSSA Terminal":
     
@@ -69,14 +71,14 @@ if app_mode == "🚀 BOSSA Terminal":
         df['EMA_100'] = ema100
         df['EMA_200'] = ema200
 
-        # Regresja (Trend Liniowy)
+        # Regresja
         y = close.tail(50).values
         x = np.arange(len(y))
         coef = np.polyfit(x, y, 1)
         lin_reg = np.poly1d(coef)(x)
         std_dev = np.std(y - lin_reg)
         
-        # Logika Sygnałów
+        # Logika
         current_price = close.iloc[-1]
         keltner_upper = EMAIndicator(close, window=20).ema_indicator().iloc[-1] + (atr.iloc[-1] * ATR_MULTIPLIER)
         
@@ -84,7 +86,6 @@ if app_mode == "🚀 BOSSA Terminal":
         risk_note = "Neutral"
         sl_price = 0.0
         
-        # Warunki wejścia
         is_trend = current_price > ema200.iloc[-1] and ema100.iloc[-1] > ema200.iloc[-1]
         is_momentum = rsi.iloc[-1] >= RSI_MOMENTUM
         
@@ -109,7 +110,7 @@ if app_mode == "🚀 BOSSA Terminal":
     st.title("🚀 BOSSA 3.3 TERMINAL")
     
     with st.sidebar:
-        st.header("Ustawienia")
+        st.header("Ustawienia Terminala")
         capital = st.number_input("Kapitał (PLN/USD)", 10000, step=1000)
         risk_pct = st.slider("Ryzyko (%)", 0.5, 5.0, 1.0) / 100
         show_all = st.checkbox("Pokaż wszystkie (nawet WAIT)", False)
@@ -140,13 +141,163 @@ if app_mode == "🚀 BOSSA Terminal":
     
     res_df = pd.DataFrame(results)
     
-    # Filtrowanie
     if not show_all:
         final_df = res_df[res_df['Signal'].str.contains("BUY")]
     else:
         final_df = res_df
 
-    # Wyświetlanie
     if not final_df.empty:
         for idx, row in final_df.iterrows():
-            with st.expander(f"{row['Ticker']}
+            with st.expander(f"{row['Ticker']} | {row['Signal']}", expanded=True):
+                c1, c2, c3 = st.columns([1,2,1])
+                with c1:
+                    st.metric("Cena", f"{row['Price']:.2f}")
+                    st.write(f"RSI: **{row['RSI']:.1f}**")
+                    if "BUY" in row['Signal']:
+                        st.write(f"Stop Loss: **{row['SL']:.2f}**")
+                        risk_amount = capital * risk_pct
+                        dist = row['Price'] - row['SL']
+                        if dist > 0:
+                            qty = risk_amount / dist
+                            st.info(f"Kup: **{int(qty)} szt.**\n(Ryzyko: {risk_amount:.0f})")
+                    else:
+                        st.caption("Brak sygnału - Kalkulator ukryty.")
+
+                with c2:
+                    df_chart = row['DataFrame'].tail(150)
+                    fig = go.Figure()
+                    fig.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name='Cena'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_9'], line=dict(color='blue', width=1), name='EMA 9'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_17'], line=dict(color='orange', width=1), name='EMA 17'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_100'], line=dict(color='purple', width=1.5, dash='dot'), name='EMA 100'))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], line=dict(color='black', width=2), name='EMA 200'))
+                    
+                    if show_crosses:
+                        cross_gold = df_chart[(df_chart['EMA_100'] > df_chart['EMA_200']) & (df_chart['EMA_100'].shift(1) < df_chart['EMA_200'].shift(1))]
+                        fig.add_trace(go.Scatter(mode='markers', x=cross_gold.index, y=cross_gold['EMA_100'], marker=dict(color='gold', symbol='diamond', size=12, line=dict(width=2, color='black')), name='Golden Cross'))
+
+                    if "BUY" in row['Signal']:
+                        fig.add_hline(y=row['SL'], line_dash="dash", line_color="red")
+                    
+                    fig.update_layout(xaxis_rangeslider_visible=False, height=350, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with c3:
+                    st.subheader("Ocena Ryzyka")
+                    st.write(f"Sytuacja: {row['Risk Note']}")
+                    diff = ((row['Price'] - row['Reg_Last'])/row['Reg_Last'])*100
+                    if diff > 0: st.write(f"📈 Odchylenie: **+{diff:.1f}%**")
+                    else: st.write(f"📉 Odchylenie: **{diff:.1f}%**")
+                    if row['Price'] > row['Reg_Upper']: st.error("🚨 EKSTREMALNIE DROGO (>2SD)")
+                    elif diff > 5: st.warning("⚠️ Dość drogo")
+                    else: st.success("✅ W normie")
+    else:
+        st.info("Brak sygnałów kupna w Twoim portfelu.")
+
+# ==========================================
+# APLIKACJA 2: KALKULATOR BEZPIECZNEGO INWESTORA (Twoja Wersja)
+# ==========================================
+elif app_mode == "🛡️ Kalkulator Bezpiecznego Inwestora":
+    st.title("🛡️ Kalkulator Bezpiecznego Inwestora")
+    st.write("Strategia: Kupuj, gdy inni się boją (poniżej średniej 200-tygodniowej).")
+
+    @st.cache_data(ttl=600)
+    def pobierz_dane_safe(symbol_aktywa):
+        ticker = yf.Ticker(symbol_aktywa)
+        df = ticker.history(period="5y", interval="1wk")
+        return df
+
+    symbol = st.text_input("Wpisz symbol (np. BTC-USD, GLD, GOOG):", value="BTC-USD").upper()
+
+    if symbol == "GOLD":
+        st.warning("Dla złota wpisz symbol: GLD (fundusz) lub GC=F (kontrakty). Używam GLD.")
+        symbol = "GLD"
+
+    if symbol:
+        try:
+            with st.spinner(f'Sprawdzam cenę {symbol}...'):
+                data = pobierz_dane_safe(symbol)
+                
+                if data.empty:
+                    st.error(f"Nie znaleziono symbolu '{symbol}'. Sprawdź pisownię na Yahoo Finance.")
+                else:
+                    # --- LOGIKA ---
+                    current_price = data['Close'].iloc[-1]
+                    wma_200 = data['Close'].rolling(window=200).mean().iloc[-1]
+                    
+                    if pd.isna(wma_200):
+                         wma_200 = data['Close'].min()
+
+                    risk_floor = wma_200
+                    ath = data['High'].max()
+                    reward_ceiling = max(ath, current_price * 1.1)
+                    
+                    upside = reward_ceiling - current_price
+                    downside = current_price - risk_floor
+                    
+                    if downside <= 0:
+                        rr_ratio = 10.0
+                        verdict = "OKAZJA ŻYCIA (Cena poniżej średniej!)"
+                        color = "#21c354"
+                    else:
+                        rr_ratio = upside / downside
+                        if rr_ratio > 3:
+                            verdict = "OKAZJA (KUPUJ)"
+                            color = "#21c354"
+                        elif rr_ratio > 1:
+                            verdict = "NEUTRALNIE (CZEKAJ)"
+                            color = "#ffa421"
+                        else:
+                            verdict = "NIEOPŁACALNE (RYZYKO!)"
+                            color = "#ff4b4b"
+
+                    # --- WYŚWIETLANIE ---
+                    col_main, col_chart = st.columns([1, 2])
+                    
+                    with col_main:
+                        st.metric(label="Aktualna Cena", value=f"${current_price:,.2f}")
+                        st.markdown(f"### Werdykt: <span style='color:{color}'>{verdict}</span>", unsafe_allow_html=True)
+                        st.write("---")
+                        st.metric("Bezpieczne Dno (MA200)", f"${risk_floor:,.0f}", delta=f"-${downside:,.0f}", delta_color="inverse")
+                        st.metric("Realny Szczyt (ATH)", f"${reward_ceiling:,.0f}", delta=f"+${upside:,.0f}")
+
+                    with col_chart:
+                        fig = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = rr_ratio,
+                            title = {'text': "Wskaźnik Zysku do Ryzyka"},
+                            gauge = {
+                                'axis': {'range': [0, 5]},
+                                'bar': {'color': "black"},
+                                'steps': [
+                                    {'range': [0, 1], 'color': "#ff4b4b"},
+                                    {'range': [1, 3], 'color': "#ffa421"},
+                                    {'range': [3, 5], 'color': "#21c354"}
+                                ],
+                                'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': rr_ratio}
+                            }
+                        ))
+                        st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Błąd: {e}")
+
+# ==========================================
+# APLIKACJA 3: IRYDOLOGIA
+# ==========================================
+elif app_mode == "👁️ Irydologia AI":
+    st.title("👁️ Irydologia - Analiza Tęczówki")
+    st.write("Wgraj zdjęcie oka, aby dokonać analizy zdrowia.")
+    
+    uploaded_file = st.file_uploader("Wybierz zdjęcie oka...", type=["jpg", "png", "jpeg"])
+    
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption='Analizowane zdjęcie', use_column_width=True)
+        
+        if st.button("🔍 Rozpocznij Analizę AI"):
+            with st.spinner('Analizuję strukturę tęczówki...'):
+                import time
+                time.sleep(2) 
+                st.success("Analiza zakończona (Wersja Demo)")
+                st.info("Tutaj w przyszłości pojawi się wynik z Gemini AI.")
