@@ -38,7 +38,7 @@ st.sidebar.markdown("---")
 app_mode = st.sidebar.selectbox("Wybierz aplikację:", 
     [
         "🚀 BOSSA Terminal", 
-        "📈 Analiza Trendu (Regresja 2SD)", 
+        "📈 Analiza Trendu (Regresja 1-3SD)", 
         "🛡️ Kalkulator Bezpiecznego Inwestora", 
         "👁️ Irydologia AI"
     ]
@@ -189,11 +189,16 @@ if app_mode == "🚀 BOSSA Terminal":
     else: st.info("Brak sygnałów.")
 
 # ==========================================
-# APLIKACJA 4: REGRESJA LINIOWA + KANAŁY 2SD (LOG)
+# APLIKACJA 4: REGRESJA LINIOWA + KANAŁY 1, 2 i 3 SD (LOG)
 # ==========================================
-elif app_mode == "📈 Analiza Trendu (Regresja 2SD)":
-    st.title("📈 Kanały Regresji Logarytmicznej (+/- 2SD)")
-    st.markdown("Analiza pokazuje, czy cena jest 'droga' (powyżej górnej linii) czy 'tania' (poniżej dolnej linii) względem trendu.")
+elif app_mode == "📈 Analiza Trendu (Regresja 1-3SD)":
+    st.title("📈 Analiza Trendu (Regresja 1SD, 2SD, 3SD)")
+    st.markdown("""
+    **Legenda:**
+    - 🔵 **Linia ciągła:** Główny Trend
+    - 🔴/🟢 **Linia przerywana (Dash):** 2 Odchylenia (Silny opór/wsparcie)
+    - 🔴/🟢 **Linia kropkowana (Dot):** 1 Odchylenie (Normalny zakres)
+    """)
 
     with st.sidebar:
         st.header("Ustawienia Trendu")
@@ -226,7 +231,7 @@ elif app_mode == "📈 Analiza Trendu (Regresja 2SD)":
                     # 1. Przygotowanie danych (LOGARYTMICZNE)
                     y = df_reg['Close'].values
                     x = np.arange(len(y))
-                    y_log = np.log(y) # Logarytm z ceny dla lepszego dopasowania
+                    y_log = np.log(y)
                     
                     # 2. Obliczenie Regresji na logarytmach
                     slope, intercept = np.polyfit(x, y_log, 1)
@@ -234,78 +239,113 @@ elif app_mode == "📈 Analiza Trendu (Regresja 2SD)":
                     # 3. Wyznaczenie linii trendu (log)
                     trend_log = slope * x + intercept
                     
-                    # 4. Obliczenie odchylenia standardowego (na logach)
+                    # 4. Obliczenie odchylenia standardowego
                     std_dev = np.std(y_log - trend_log)
                     
-                    # 5. Wyznaczenie kanałów (Góra/Dół +/- 2SD)
-                    upper_log = trend_log + (2 * std_dev)
-                    lower_log = trend_log - (2 * std_dev)
+                    # 5. Wyznaczenie kanałów (Logarytmicznie)
+                    # 2 SD
+                    upper_2sd_log = trend_log + (2 * std_dev)
+                    lower_2sd_log = trend_log - (2 * std_dev)
+                    # 1 SD
+                    upper_1sd_log = trend_log + (1 * std_dev)
+                    lower_1sd_log = trend_log - (1 * std_dev)
+                    # 3 SD (Dla analizy extreme)
+                    upper_3sd_log = trend_log + (3 * std_dev)
+                    lower_3sd_log = trend_log - (3 * std_dev)
                     
-                    # 6. Powrót do zwykłej ceny (EXP)
+                    # 6. Powrót do ceny (EXP)
                     trend_line = np.exp(trend_log)
-                    upper_line = np.exp(upper_log)
-                    lower_line = np.exp(lower_log)
                     
-                    # Ocena sytuacji (Gdzie jesteśmy?)
+                    upper_2sd = np.exp(upper_2sd_log)
+                    lower_2sd = np.exp(lower_2sd_log)
+                    
+                    upper_1sd = np.exp(upper_1sd_log)
+                    lower_1sd = np.exp(lower_1sd_log)
+                    
+                    upper_3sd = np.exp(upper_3sd_log)
+                    lower_3sd = np.exp(lower_3sd_log)
+                    
+                    # Ocena sytuacji
                     current_price = y[-1]
                     current_trend = trend_line[-1]
-                    current_upper = upper_line[-1]
-                    current_lower = lower_line[-1]
                     
                     # Dystans do trendu w %
                     dist_to_trend = ((current_price - current_trend) / current_trend) * 100
                     
+                    # Status Extreme (czy przebija 2SD i czy blisko 3SD)
+                    extreme_note = ""
+                    if current_price > upper_2sd[-1]:
+                        dist_to_3sd = upper_3sd[-1] - current_price
+                        if dist_to_3sd <= 0: extreme_note = "🚀 CENA POWYŻEJ 3 SD! (MEGA BAŃKA)"
+                        else: extreme_note = f"⚠️ Powyżej 2 SD. Do 3 SD brakuje {(dist_to_3sd/current_price)*100:.1f}%"
+                    elif current_price < lower_2sd[-1]:
+                        dist_to_3sd = current_price - lower_3sd[-1]
+                        if dist_to_3sd <= 0: extreme_note = "🩸 CENA PONIŻEJ 3 SD! (MEGA KRACH)"
+                        else: extreme_note = f"⚠️ Poniżej 2 SD. Do 3 SD brakuje {(dist_to_3sd/current_price)*100:.1f}%"
+                    
                     results_reg.append({
                         "Ticker": t,
-                        "Slope": slope, # Nachylenie logarytmiczne
+                        "Slope": slope,
                         "DistPct": dist_to_trend,
                         "Data": df_reg,
                         "TrendLine": trend_line,
-                        "UpperLine": upper_line,
-                        "LowerLine": lower_line
+                        "Upper2SD": upper_2sd, "Lower2SD": lower_2sd,
+                        "Upper1SD": upper_1sd, "Lower1SD": lower_1sd,
+                        "ExtremeNote": extreme_note
                     })
             except: pass
 
         progress.empty()
         status.empty()
         
-        # Sortujemy wg odchylenia od trendu (kto jest najbardziej "wygrzany" lub "przeceniony")
+        # Sortowanie
         results_reg.sort(key=lambda x: x['DistPct'], reverse=True)
 
         if results_reg:
             st.success(f"Analiza {len(results_reg)} spółek zakończona.")
             
+            # --- PĘTLA PO WYNIKACH (BEZ EXPANDERA - OD RAZU WIDOCZNE) ---
             for res in results_reg:
-                # Kolorowanie nagłówka w zależności od pozycji
-                header_icon = "⚖️"
-                if res['Data']['Close'].iloc[-1] > res['UpperLine'][-1]: header_icon = "🔥 DROGO (>2SD)"
-                elif res['Data']['Close'].iloc[-1] < res['LowerLine'][-1]: header_icon = "💎 TANIO (<2SD)"
+                st.container()
                 
-                with st.expander(f"{res['Ticker']} | {header_icon} | Odchylenie: {res['DistPct']:.1f}%", expanded=False):
-                    c1, c2 = st.columns([1, 3])
-                    with c1:
-                        st.metric("Cena", f"{res['Data']['Close'].iloc[-1]:.2f}")
-                        st.metric("Odchylenie od środka", f"{res['DistPct']:.2f}%")
-                        st.caption("Jeśli cena jest powyżej czerwonej linii - statystycznie drogo. Poniżej zielonej - tanio.")
-                    
-                    with c2:
-                        df_chart = res['Data']
-                        fig = go.Figure()
-                        
-                        # Kanał Górny (+2SD)
-                        fig.add_trace(go.Scatter(x=df_chart.index, y=res['UpperLine'], mode='lines', name='+2 SD', line=dict(color='red', width=1, dash='dash')))
-                        
-                        # Kanał Dolny (-2SD)
-                        fig.add_trace(go.Scatter(x=df_chart.index, y=res['LowerLine'], mode='lines', name='-2 SD', line=dict(color='green', width=1, dash='dash')))
-                        
-                        # Środek (Trend)
-                        fig.add_trace(go.Scatter(x=df_chart.index, y=res['TrendLine'], mode='lines', name='Trend', line=dict(color='blue', width=2)))
-                        
-                        # Cena (Czarna linia)
-                        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', name='Cena', line=dict(color='black', width=2)))
+                # Nagłówek wizualny
+                header_text = f"{res['Ticker']} | Odchylenie: {res['DistPct']:.1f}%"
+                if res['ExtremeNote']:
+                    header_text += f" | {res['ExtremeNote']}"
+                
+                st.markdown(f"#### {header_text}")
 
-                        fig.update_layout(height=350, margin=dict(l=10, r=10, t=30, b=10))
-                        st.plotly_chart(fig, use_container_width=True, key=f"reg2sd_{res['Ticker']}")
+                c1, c2 = st.columns([1, 4])
+                with c1:
+                    st.metric("Cena", f"{res['Data']['Close'].iloc[-1]:.2f}")
+                    st.metric("Odchylenie %", f"{res['DistPct']:.2f}%")
+                    if res['ExtremeNote']:
+                        st.error(res['ExtremeNote'])
+                    else:
+                        st.info("Cena w normie (<2SD)")
+                
+                with c2:
+                    df_chart = res['Data']
+                    fig = go.Figure()
+                    
+                    # 2 SD (Dash)
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Upper2SD'], mode='lines', name='+2 SD', line=dict(color='red', width=1, dash='dash')))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Lower2SD'], mode='lines', name='-2 SD', line=dict(color='green', width=1, dash='dash')))
+                    
+                    # 1 SD (Dot - Dodatek)
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Upper1SD'], mode='lines', name='+1 SD', line=dict(color='red', width=1, dash='dot')))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['Lower1SD'], mode='lines', name='-1 SD', line=dict(color='green', width=1, dash='dot')))
+                    
+                    # Trend
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=res['TrendLine'], mode='lines', name='Trend', line=dict(color='blue', width=2)))
+                    
+                    # Cena
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', name='Cena', line=dict(color='black', width=2)))
+
+                    fig.update_layout(height=400, margin=dict(l=10, r=10, t=10, b=10))
+                    st.plotly_chart(fig, use_container_width=True, key=f"reg2sd_{res['Ticker']}")
+                
+                st.markdown("---") # Linia oddzielająca spółki
         else:
             st.warning("Brak danych.")
 
